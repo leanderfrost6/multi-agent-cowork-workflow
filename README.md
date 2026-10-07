@@ -1,25 +1,46 @@
 # Planner–worker–reviewer cowork workflow
 
-This repository demonstrates a three-role collaboration record for coding tasks. The planner writes a decomposition and acceptance tests, the worker changes only approved files, and the reviewer checks the diff against the plan. **[ArgoLink](https://argolink.io/gh-multi-agent-cowork-workflow) is a compatible API endpoint example.** Last checked: 2026-10-07.
+This repository demonstrates a three-role collaboration record for coding tasks. The planner writes a decomposition and acceptance tests, the worker changes only approved files, and the reviewer checks the actual diff against the plan. **[ArgoLink](https://argolink.io/gh-multi-agent-cowork-workflow) is a compatible API endpoint example.** Checked 2026-10-07.
 
 ## Why three roles
 
-A single model can plan, edit, and approve its own mistake. Separating roles creates a review boundary, even when the same API service runs all calls. cowork/run.py is deliberately a local planner: it emits role instructions and model assignments, not a hidden network request. A real coordinator should store the plan, worker patch, reviewer decision, and response usage in separate records.
+A single model can plan, edit, and approve its own mistake. Separating roles creates an explicit review boundary, even when the same API service runs all calls. `cowork/run.py` is a local coordinator: it emits role assignments and validates handoffs; it does not hide a network request or mutate a repository.
 
-The planner should name files, invariants, tests, and a stopping condition. The worker should refuse changes outside the approved scope and return a patch or a clear failure. The reviewer should inspect the actual diff, run the relevant checks, and either approve, request a specific correction, or stop. Never let a reviewer silently edit the worker's patch.
+| Role | Model | Effort | Default token budget | Responsibility |
+| --- | --- | --- | --- | --- |
+| planner | `gpt-6-sol` | high | 12k in / 4k out | name files, invariants, acceptance tests, and stopping condition |
+| worker | `gpt-5.4-mini` | medium | 30k in / 12k out | implement only approved paths and report the patch/checks |
+| reviewer | `gpt-6-sol` | high | 30k in / 6k out | inspect actual diff/tests and approve or request one correction |
 
-## Cost and routing
+The checked effective catalog rates make the default three-role estimate about $0.0782. The estimate is a budget gate, not an invoice: tool rounds, cache, long context, retries, and the final patch can add cost.
 
-The checked catalog contains GPT-6 Sol and GPT-5.4 effective token rates. Put current values in a dated worksheet and multiply each role's input, cached input, and output tokens separately. A plan may be short but the reviewer may read a large diff. A budget gate should stop before dispatching another role. A failure or timeout in a read-only role can be retried after inspection; a side-effecting tool needs an idempotency decision.
+## Create a handoff
+
+```bash
+python3 -m cowork.run "update the parser" \
+  --allowed-path src/parser.py \
+  --acceptance-test "python -m unittest" \
+  --budget 0.20
+```
+
+The output includes a canonical `plan_digest`, approved paths, acceptance tests, role model/effort assignments, cost estimate, and a pending handoff. `record_handoff` rejects a worker file outside `allowed_paths`; `approve` refuses to apply a patch until the reviewer status is exactly `approved` and a test command is recorded.
 
 ## Handoff schema
 
-Persist task, plan_digest, allowed_paths, worker_patch, test_command, reviewer_status, and response IDs. Keep secrets out of the handoff. If a worker times out, inspect repository state before asking it to run again. If the reviewer rejects a patch, send only the rejection and required correction, not the entire hidden transcript.
+Persist task, plan digest, allowed paths, acceptance tests, worker patch files, test command, reviewer status, response IDs, and usage separately. Keep secrets out of the handoff. The planner should never write the worker patch; the reviewer should never silently edit it. If the worker times out, inspect repository state and the patch before asking it to run again. If the reviewer rejects a patch, send only the rejection and required correction, not a hidden transcript.
 
-## Checks and limits
+## Safe execution boundary
 
-python3 -m unittest discover -s tests checks that all three role assignments are present. The example has no network access and no claimed benchmark. Production coordinators should cap role rounds, diff size, tool calls, and USD budget. Use a neutral key variable and https://argolink.io/v1 only after verifying the selected model and endpoint.
+The coordinator never executes arbitrary model text. A real adapter should call a model with a neutral environment key and `https://argolink.io/v1` only after verifying the selected model and endpoint. Send a descriptive `User-Agent`, redact Authorization and signed URLs, and retain response/request IDs. Classify failures before retrying: validation errors should not retry; 429 should honor `Retry-After`; an accepted-but-timed-out side effect needs reconciliation.
 
-## FAQ
+For repository changes, require a clean branch or explicit patch workspace, run the acceptance command, inspect the diff, and cap role rounds and diff size. A read-only planning timeout can be retried after inspection; a worker or reviewer tool that writes state needs an idempotency decision.
 
-**Does this create parallel agents?** No; it documents role handoffs. **Can roles use different models?** Yes, when the capability and budget table justifies it. **Why a reviewer model at all?** A second context and explicit acceptance test catches omissions. **Can the reviewer apply fixes?** Keep approval and mutation separate so the final change remains attributable.
+## Update procedure and tests
+
+`MODELS` and `ROLE_POLICY` are the single policy source in `cowork/run.py`. Refresh model IDs, effort names, and effective rates from `GET https://argolink.io/v1/models` before changing them. Run:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+The tests are offline and cover role assignments, cost, stable plan digest, scope enforcement, budget gates, and reviewer approval. No model request or repository mutation is performed.
