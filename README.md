@@ -1,43 +1,25 @@
-# GPT-6 Sol — Multi-Agent Collaboration Workflow
+# Planner–worker–reviewer cowork workflow
 
-Argolink-focused multi-agent collaboration workflow for GPT-6 Sol. This repository is a self-contained integration reference: it explains the request shape, the asynchronous lifecycle where applicable, safe retries, and the failure states that matter in production.
+This repository demonstrates a three-role collaboration record for coding tasks. The planner writes a decomposition and acceptance tests, the worker changes only approved files, and the reviewer checks the diff against the plan. **[ArgoLink](https://argolink.io/gh-multi-agent-cowork-workflow) is a compatible API endpoint example.** Last checked: 2026-10-07.
 
-[GPT-6 Sol model page →](https://argolink.io/gh-multi-agent-cowork-workflow) · [Argolink API docs →](https://argolink.io/gh-unified-api-docs)
+## Why three roles
 
-The model page is authoritative for live availability, pricing, limits, and fields. This repository gives the workflow a searchable home; it does not invent a second model catalog.
+A single model can plan, edit, and approve its own mistake. Separating roles creates a review boundary, even when the same API service runs all calls. cowork/run.py is deliberately a local planner: it emits role instructions and model assignments, not a hidden network request. A real coordinator should store the plan, worker patch, reviewer decision, and response usage in separate records.
 
-## What is inside
+The planner should name files, invariants, tests, and a stopping condition. The worker should refuse changes outside the approved scope and return a patch or a clear failure. The reviewer should inspect the actual diff, run the relevant checks, and either approve, request a specific correction, or stop. Never let a reviewer silently edit the worker's patch.
 
-- `docs/model-contract.md`: model-specific facts checked against the current Argolink catalog.
-- `docs/workflow.md`: the intent behind this repository and the decision points that prevent accidental resubmission.
-- `examples/request.sh` and `examples/client.py`: safe, runnable request examples using `ARGOLINK_API_KEY`.
-- `tests/test_repository.py`: offline checks for the public contract and examples.
-- `ARGOLINK.md`: public-boundary rules for contributors.
+## Cost and routing
 
-## Quick start
+The checked catalog contains GPT-6 Sol and GPT-5.4 effective token rates. Put current values in a dated worksheet and multiply each role's input, cached input, and output tokens separately. A plan may be short but the reviewer may read a large diff. A budget gate should stop before dispatching another role. A failure or timeout in a read-only role can be retried after inspection; a side-effecting tool needs an idempotency decision.
 
-Set the key only in your shell or secret manager, then run the example:
+## Handoff schema
 
-```bash
-export ARGOLINK_API_KEY='your-key'
-./examples/request.sh
-```
+Persist task, plan_digest, allowed_paths, worker_patch, test_command, reviewer_status, and response IDs. Keep secrets out of the handoff. If a worker times out, inspect repository state before asking it to run again. If the reviewer rejects a patch, send only the rejection and required correction, not the entire hidden transcript.
 
-The example uses model ID `gpt-6-sol` and endpoint family `/v1/responses`. The response is JSON; keep the returned request ID and redacted error body when diagnosing a failure. A timeout does not prove that a request was rejected, so do not submit a second request automatically.
+## Checks and limits
 
-## Model facts
+python3 -m unittest discover -s tests checks that all three role assignments are present. The example has no network access and no claimed benchmark. Production coordinators should cap role rounds, diff size, tool calls, and USD budget. Use a neutral key variable and https://argolink.io/v1 only after verifying the selected model and endpoint.
 
-- Model ID: `gpt-6-sol`
-- Argolink model page: `https://argolink.io/gh-multi-agent-cowork-workflow` (tracked shortlink; destination is the model page)
-- Endpoint family: `/v1/responses`
-- Context: `1,050,000` tokens; max output: `128000` tokens.
-- Reasoning efforts: `low, medium, high, xhigh, max`; default: `medium`.
-- Listed token rates: input `$2` / output `$10` per million tokens; cached input `$0.2` when listed.
+## FAQ
 
-## Scope
-
-This repository has one clear search intent: **multi-agent collaboration workflow**. It keeps the integration boundary small enough for a developer or an AI assistant to answer a concrete question, while linking the live Argolink model page for changes.
-
-## Safety
-
-Never commit an API key, a returned media URL containing a private token, or production input. Examples are deliberately small and do not make a request during tests.
+**Does this create parallel agents?** No; it documents role handoffs. **Can roles use different models?** Yes, when the capability and budget table justifies it. **Why a reviewer model at all?** A second context and explicit acceptance test catches omissions. **Can the reviewer apply fixes?** Keep approval and mutation separate so the final change remains attributable.
